@@ -1,0 +1,21 @@
+# Importing the dataset
+
+#install.packages("readxl")
+library(readxl)
+setwd("C:/Users/nassi/OneDrive/Documents/ISTA_321/widsdatathon2025/TRAIN")
+quantitative <- read_excel("TRAIN_QUANTITATIVE_METADATA.xlsx")
+categorical <- read_excel("TRAIN_CATEGORICAL_METADATA.xlsx")
+solution <- read_excel("TRAINING_SOLUTIONS.xlsx")
+head(quantitative)
+
+# Merging the three files together
+
+library(tidyverse)
+merged_data <- inner_join(quantitative, categorical, by = "participant_id")
+all_data <- inner_join(merged_data, solution, by = "participant_id")
+
+# Creating some visualizations
+
+hist(all_data$Basic_Demos_Enroll_Year)
+hist(all_data$ADHD_Outcome)
+hist(all_data$Sex_F)
