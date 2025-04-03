@@ -2,20 +2,38 @@
 
 #install.packages("readxl")
 library(readxl)
-setwd("C:/Users/nassi/OneDrive/Documents/ISTA_321/widsdatathon2025/TRAIN")
-quantitative <- read_excel("TRAIN_QUANTITATIVE_METADATA.xlsx")
-categorical <- read_excel("TRAIN_CATEGORICAL_METADATA.xlsx")
+setwd("C:/Users/nassi/OneDrive/Documents/ISTA_321/widsdatathon2025/TRAIN_NEW")
+quantitative <- read_excel("TRAIN_QUANTITATIVE_METADATA_new.xlsx")
+categorical <- read_excel("TRAIN_CATEGORICAL_METADATA_new.xlsx")
 solution <- read_excel("TRAINING_SOLUTIONS.xlsx")
-head(quantitative)
+connectome <- read.csv("TRAIN_FUNCTIONAL_CONNECTOME_MATRICES_new_36P_Pearson.csv")
 
-# Merging the three files together
+# Checking if there are any NA's
+sum(is.na(quantitative))
+sum(is.na(categorical))
+sum(is.na(connectome))
 
+# Imputating the NA values
+quant <- quantitative
+for (i in 1:ncol(quant)) {
+  if(is.numeric(quant[[i]])){
+    quant[[i]][is.na(quant[[i]])] <- mean(quant[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(quant))
+
+cat <- categorical 
+for (i in 1:ncol(cat)){
+  if(is.numeric(cat[[i]])){
+    cat[[i]][is.na(cat[[i]])] <- mean(cat[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(cat))
+
+# Merging the dataset
 library(tidyverse)
-merged_data <- inner_join(quantitative, categorical, by = "participant_id")
+merged_data <- inner_join(quant, cat, by = "participant_id")
 all_data <- inner_join(merged_data, solution, by = "participant_id")
+all_data_complete <- inner_join(all_data, connectome, by = "participant_id")
+head(all_data_complete)
 
-# Creating some visualizations
-
-hist(all_data$Basic_Demos_Enroll_Year)
-hist(all_data$ADHD_Outcome)
-hist(all_data$Sex_F)
