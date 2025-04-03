@@ -1,0 +1,176 @@
+---
+title: "Untitled"
+author: "Genesis StOnge"
+date: "2025-03-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#install.packages("readxl")
+library(readxl)
+library(tidyverse)
+library(corrplot)
+
+getwd()
+
+quantitative <- read_excel("TRAIN_QUANTITATIVE_METADATA_new.xlsx")
+categorical <- read_excel("TRAIN_CATEGORICAL_METADATA_new.xlsx")
+train_solution <- read_excel("TRAINING_SOLUTIONS.xlsx")
+
+head(train_quantitative)
+head(train_categorical)
+head(train_solution)
+
+
+# Merging the three files together
+
+
+merged_data <- inner_join(train_quantitative, train_categorical, by = "participant_id")
+all_data <- inner_join(merged_data, train_solution, by = "participant_id")
+
+# Creating some visualizations
+
+hist(all_data$Basic_Demos_Enroll_Year)
+hist(all_data$ADHD_Outcome)
+hist(all_data$Sex_F)
+
+glimpse(all_data)
+```
+```{r}
+
+# Imputating the NA values
+train_quantitative <- quantitative
+for (i in 1:ncol(train_quantitative)) {
+  if(is.numeric(train_quantitative[[i]])){
+    train_quantitative[[i]][is.na(train_quantitative[[i]])] <- mean(train_quantitative[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(train_quantitative))
+
+train_categorical <- categorical 
+for (i in 1:ncol(train_categorical)){
+  if(is.numeric(train_categorical[[i]])){
+    train_categorical[[i]][is.na(train_categorical[[i]])] <- mean(train_categorical[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(train_categorical))
+
+```
+
+
+```{r}
+
+
+# Ensure only numeric columns are used for correlation
+correlation <- train_quantitative %>%
+  select(where(is.numeric)) %>%  # Select numeric columns
+  cor(use = "pairwise.complete.obs")  # Compute correlation
+
+# Visualize the correlation matrix
+corrplot(correlation, method = "color", tl.cex = 0.7, type = "upper")
+
+# Convert to a data frame for easy filtering
+cor_df <- as.data.frame(as.table(correlation))
+
+# Filter correlations greater than 0.5 and exclude self-correlations (where Var1 == Var2)
+strong_correlations <- cor_df %>%
+  filter(Freq > 0.8 & Var1 != Var2) %>%
+  arrange(desc(Freq))
+
+# Print strong correlations
+print(strong_correlations)
+
+```
+
+```{r}
+train_connectome <- read_csv("TRAIN_FUNCTIONAL_CONNECTOME_MATRICES.csv")
+
+head(train_connectome)
+```
+```{r}
+# For PCA and data manipulation
+library(caret)       # for preprocessing
+library(FactoMineR)  # for PCA
+library(factoextra)  # for PCA visualization (optional)
+```
+```{r}
+matrix_only <- train_connectome %>% 
+  select(where(is.numeric))
+
+matrix_scaled <- scale(matrix_only)
+
+pca_result <- prcomp(matrix_scaled, center = TRUE, scale. = TRUE)
+
+summary(pca_result)
+glimpse(pca_result)
+fviz_eig(pca_result, addlabels = TRUE, ylim = c(0, 50))
+
+
+connectome_pca <- as.data.frame(pca_result$x[, 1:100])
+
+
+final_dataset <- bind_cols(all_data %>% 
+                             select(ADHD_Outcome, Sex_F, everything()), connectome_pca)
+
+
+head(final_dataset)
+glimpse(final_dataset)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(glmnet)
+library(pROC)
+library(MLmetrics)
+
+```
+
+```{r}
+# 1. Remove non-predictive IDs
+data_model <- final_dataset %>% select(-participant_id)
+
+# 2. Define targets
+targets <- data_model %>% select(ADHD_Outcome, Sex_F)
+
+# 3. Define predictors (including metadata + PC1 to PC100)
+predictors <- data_model %>% select(-ADHD_Outcome, -Sex_F)
+
+# 4. Train/test split (80/20)
+set.seed(123)
+train_index <- createDataPartition(targets$ADHD_Outcome, p = 0.8, list = FALSE)
+X_train <- predictors[train_index, ]
+X_test <- predictors[-train_index, ]
+Y_train <- targets[train_index, ]
+Y_test <- targets[-train_index, ]
+
+
+#ADHD Output model
+rf_adhd <- randomForest(x = X_train, y = as.factor(Y_train$ADHD_Outcome), ntree = 500)
+
+#Sex Model
+rf_sex <- randomForest(x = X_train, y = as.factor(Y_train$Sex_F), ntree = 500)
+
+
+#Evaluate Models
+adhd_preds <- predict(rf_adhd, X_test, type = "prob")[, 2]
+adhd_auc <- AUC(adhd_preds, Y_test$ADHD_Outcome)
+print(paste("AUC for ADHD:", adhd_auc))
+
+
+sex_preds <- predict(rf_sex, X_test, type = "prob")[, 2]
+sex_auc <- AUC(sex_preds, Y_test$Sex_F)
+print(paste("AUC for Sex:", sex_auc))
+
+
+importance(rf_adhd) %>% as.data.frame() %>% arrange(desc(MeanDecreaseGini)) %>% head(10)
+importance(rf_sex) %>% as.data.frame() %>% arrange(desc(MeanDecreaseGini)) %>% head(10)
+
+```
+
