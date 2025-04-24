@@ -1,0 +1,257 @@
+---
+title: "WiDSDatathon"
+author: "Luis Ugarte"
+date: "2025-03-06"
+output: pdf_document
+---
+
+
+```{r}
+# Importing the TRAIN dataset---------------------------------------------------------------------------------------------------------------------
+library(readxl)
+quantitative <- read_excel("TRAIN_QUANTITATIVE_METADATA_new.xlsx")
+categorical <- read_excel("TRAIN_CATEGORICAL_METADATA_new.xlsx")
+solution <- read_excel("TRAINING_SOLUTIONS.xlsx")
+connectome <- read.csv("TRAIN_FUNCTIONAL_CONNECTOME_MATRICES_new_36P_Pearson.csv")
+```
+
+
+```{r}
+# Checking if there are any NA's
+sum(is.na(quantitative))
+sum(is.na(categorical))
+sum(is.na(connectome))
+sum(is.na(solution))
+
+# Imputating the NA values
+quant <- quantitative
+for (i in 1:ncol(quant)) {
+  if(is.numeric(quant[[i]])){
+    quant[[i]][is.na(quant[[i]])] <- mean(quant[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(quant))
+
+cat <- categorical 
+for (i in 1:ncol(cat)){
+  if(is.numeric(cat[[i]])){
+    cat[[i]][is.na(cat[[i]])] <- mean(cat[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(cat))
+```
+
+
+```{r}
+# Merging the train dataset
+library(tidyverse)
+
+merged_data <- inner_join(quant, cat, by = "participant_id")
+all_data <- inner_join(merged_data, solution, by = "participant_id")
+```
+
+
+```{r}
+library(dplyr)
+# PCA to reduce dimensionality on the connectome
+matrix_only <- connectome %>%
+  select(where(is.numeric))
+
+matrix_scaled <- scale(matrix_only)
+
+pca_result <- prcomp(matrix_scaled, center = TRUE, scale. = TRUE)
+```
+
+
+```{r}
+# Extracting the the eigenvalues from the PCA object
+eigenvalues <- pca_result$sdev^2
+
+# Count eigenvalues less than 1
+sum(eigenvalues < 1)
+
+# Create a scree plot
+plot(eigenvalues, type = "b",
+     xlab = "Principal Component",
+     ylab = "Eigenvalue")
+
+# Add a line at y = 1 to indicate the elbow
+abline(h = 1, col = "red")
+
+# Looking at the graph I chose 50 as the elbow point
+connectome_pca <- as.data.frame(pca_result$x[,1:50])
+```
+
+
+```{r}
+# Merging the pca connectome to all of the whole train dataset
+final_dataset <- bind_cols(all_data %>%
+                             select(ADHD_Outcome, Sex_F, everything()), connectome_pca)
+head(final_dataset)
+```
+
+
+```{r}
+library(caret)
+# Removing non-predictive IDs
+data_model <- final_dataset %>% select(-participant_id)
+
+targets <- data_model %>% select(ADHD_Outcome, Sex_F)
+
+predictors <- data_model %>% select(-ADHD_Outcome, -Sex_F)
+
+# Train/test split (80/20)
+set.seed(123)
+train_index <- sample(1:nrow(data_model), size = 0.8 * nrow(data_model)) # Randomly sample 80% of the data
+
+X_train <- predictors[train_index, ]
+X_test <- predictors[-train_index, ]
+Y_train <- targets[train_index, ]
+Y_test <- targets[-train_index, ]
+```
+
+
+```{r}
+library(glmnet)
+# LASSO regression for adhd
+cv_model_adhd <- cv.glmnet(x = as.matrix(X_train), 
+                     y = Y_train$ADHD_Outcome,
+                     family = "binomial",
+                     alpha = 0.5)
+coefs_adhd <- coef(cv_model_adhd, s = "lambda.min")
+adhd_predictors <- rownames(coefs_adhd)[which(coefs_adhd != 0)][-1]
+
+# Subset adhd predictors in X_train
+adhd_vars <- X_train[, adhd_predictors]
+
+# LASSO regression for sex
+cv_model_sex <- cv.glmnet(x = as.matrix(X_train), 
+                     y = Y_train$Sex_F,
+                     family = "binomial",
+                     alpha = 1)
+coefs_sex <- coef(cv_model_sex, s = "lambda.min")
+sex_predictors <- rownames(coefs_sex)[which(coefs_sex != 0)][-1]
+
+# Subset sex predictors in X_train
+sex_vars <- X_train[, sex_predictors]
+```
+
+
+```{r}
+library(car)
+
+#ADHD Output model
+log_model_adhd <- glm(as.factor(Y_train$ADHD_Outcome) ~ ., data = adhd_vars, family = binomial)
+
+#Sex Output Model
+log_model_sex <- glm(as.factor(Y_train$Sex_F) ~ ., data = sex_vars, family = binomial)
+
+summary(log_model_adhd)
+summary(log_model_sex)
+
+vif(log_model_adhd)
+vif(log_model_sex)
+
+# Predict probabilities for ADHD
+test_data$predicted_prob_ADHD <- predict(log_model_adhd, newdata = test_data, type = "response")
+
+# Convert probabilities into class labels (0 or 1) based on a threshold of 0.5
+test_data$predicted_ADHD <- ifelse(test_data$predicted_prob_ADHD > 0.5, 1, 0)
+
+# Predict probabilities for sex
+test_data$predicted_prob_sex <- predict(log_model_sex, newdata = test_data, type = "response")
+
+# Convert probabilities into class labels (0 or 1) based on a threshold of 0.5
+test_data$predicted_sex <- ifelse(test_data$predicted_prob_sex > 0.5, 1, 0)
+
+# View the first few predictions
+head(test_data[, c("ADHD_Outcome", "Sex_F", "predicted_prob_ADHD", "predicted_prob_sex", "predicted_ADHD", "predicted_sex")])
+```
+
+
+```{r}
+# Importing the TEST dataset----------------------------------------------------------------------------------------------------------------------
+setwd("C:/Users/aldri/Documents/Spring 2025/ISTA 321/TEST")
+
+test_quantitative <- read_excel("TEST_QUANTITATIVE_METADATA.xlsx")
+test_categorical <- read_excel("TEST_CATEGORICAL.xlsx")
+test_connectome <- read.csv("TEST_FUNCTIONAL_CONNECTOME_MATRICES.csv")
+```
+
+
+```{r}
+# Checking if there are any NA's
+sum(is.na(test_quantitative))
+sum(is.na(test_categorical))
+sum(is.na(test_connectome))
+
+# Imputating the NA values
+test_quant <- test_quantitative
+for (i in 1:ncol(test_quant)) {
+  if(is.numeric(test_quant[[i]])){
+    test_quant[[i]][is.na(test_quant[[i]])] <- mean(test_quant[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(test_quant))
+
+test_cat <- test_categorical 
+for (i in 1:ncol(test_cat)){
+  if(is.numeric(test_cat[[i]])){
+    test_cat[[i]][is.na(test_cat[[i]])] <- mean(test_cat[[i]], na.rm = TRUE)
+  }
+}
+sum(is.na(test_cat))
+```
+
+
+```{r}
+# PCA on test connectome
+tmatrix_only <- test_connectome %>%
+  select(where(is.numeric))
+
+tmatrix_scaled <- scale(tmatrix_only)
+
+test_pca_result <- prcomp(tmatrix_scaled, center = TRUE, scale. = TRUE)
+
+test_connectome_pca <- as.data.frame(test_pca_result$x[,1:50])
+head(test_connectome_pca)
+```
+
+
+```{r}
+# Merging the test data
+merged_test_data <- inner_join(test_quant, test_cat, by = "participant_id")
+final_test_dataset <- cbind(merged_test_data, test_connectome_pca)
+head(final_test_dataset)
+```
+
+
+```{r}
+# Creating our predictions and output
+predicted_adhd <- predict(log_model_adhd, newdata = final_test_dataset, type = "response")
+predicted_gender <- predict(log_model_sex, newdata = final_test_dataset, type = "response")
+
+participant_ids <- final_test_dataset$participant_id
+
+output_df <- data.frame(
+  participant_id = participant_ids,
+  ADHD_Outcome = ifelse(predicted_adhd > 0.5, 1, 0),
+  Sex_F = ifelse(predicted_gender > 0.5, 1, 0)
+)
+print(output_df)
+
+write.csv(output_df, "Submission_1.csv", row.names = FALSE)
+```
+
+
+```{r}
+# ADHD Confusion Matrix
+adhd_pred_class <- predict(log_model_adhd, X_test, type = "response")
+adhd_pred_class <- as.factor(ifelse(adhd_pred_class > 0.5, 1, 0))
+confusionMatrix(adhd_pred_class, as.factor(Y_test$ADHD_Outcome))
+
+# Sex Confusion Matrix
+sex_pred_class <- predict(log_model_sex, X_test, type = "response")
+sex_pred_class <- as.factor(ifelse(sex_pred_class > 0.5, 1, 0))
+confusionMatrix(sex_pred_class, as.factor(Y_test$Sex_F))
+```
